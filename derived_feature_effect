@@ -1,0 +1,166 @@
+from __future__ import annotations
+
+from pathlib import Path
+import json
+
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+
+import xgboost as xgb
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import mean_squared_error, r2_score
+
+import shap
+
+
+# ==============================
+# PATHS
+# ==============================
+BASE_DIR = Path(__file__).resolve().parent
+OUT_DIR = BASE_DIR / "outputs"
+OUT_DIR.mkdir(exist_ok=True)
+
+NPZ_PATH = BASE_DIR / "boardgame_data_prepared.npz"
+ARTEFACTS_PATH = BASE_DIR / "preprocessing_artifacts.json"
+
+
+# ==============================
+# LOAD DATA
+# ==============================
+data = np.load(NPZ_PATH, allow_pickle=True)
+X_train_full = data["X_train"]
+y_train_full = data["y_train"]
+feature_names = data["feature_names"].tolist()
+
+df = pd.DataFrame(X_train_full, columns=feature_names)
+df["target"] = y_train_full
+
+
+# ==============================
+# DEFINE RAW vs DERIVED FEATURES
+# (Senin türettiğinler)
+# ==============================
+RAW_FEATURES = [
+    "MinPlayers",
+    "MaxPlayers",
+    "MfgPlaytime",
+    "MfgAgeRec",
+    "GameWeight",
+    "YearPublished",
+    "NumUserRatings",
+]
+
+DERIVED_FEATURES = [
+    "players_range",
+    "is_solo_supported",
+    "log_play_time",
+    "play_time_per_player",
+    "published_decade",
+    "age_norm",
+]
+
+# Eğer bazıları feature_names içinde yoksa (pipeline farkı vs.) otomatik ayıkla:
+RAW_FEATURES = [f for f in RAW_FEATURES if f in feature_names]
+DERIVED_FEATURES = [f for f in DERIVED_FEATURES if f in feature_names]
+
+if len(RAW_FEATURES) == 0:
+    raise ValueError("RAW_FEATURES listesi feature_names içinde bulunamadı. feature_names'i kontrol et.")
+if len(DERIVED_FEATURES) == 0:
+    raise ValueError("DERIVED_FEATURES listesi feature_names içinde bulunamadı. feature_names'i kontrol et.")
+
+
+# ==============================
+# MODEL FACTORY
+# (tuning değil, karşılaştırma için sabit)
+# ==============================
+def make_model() -> xgb.XGBRegressor:
+    return xgb.XGBRegressor(
+        objective="reg:squarederror",
+        n_estimators=600,
+        max_depth=5,
+        learning_rate=0.05,
+        subsample=0.8,
+        colsample_bytree=0.8,
+        random_state=42,
+        n_jobs=-1
+    )
+
+
+def eval_feature_set(features: list[str], label: str) -> dict:
+    X = df[features].values
+    y = df["target"].values
+
+    Xtr, Xte, ytr, yte = train_test_split(X, y, test_size=0.2, random_state=42)
+
+    model = make_model()
+    model.fit(Xtr, ytr)
+    pred = model.predict(Xte)
+
+    rmse = float(np.sqrt(mean_squared_error(yte, pred)))
+    r2 = float(r2_score(yte, pred))
+
+    return {"Model": label, "RMSE": rmse, "R2": r2}
+
+
+# ==============================
+# 1) ABLATION STUDY RESULTS
+# ==============================
+results = []
+results.append(eval_feature_set(RAW_FEATURES, "Raw Only"))
+results.append(eval_feature_set(RAW_FEATURES + DERIVED_FEATURES, "Raw + Derived"))
+results.append(eval_feature_set(DERIVED_FEATURES, "Derived Only"))
+
+res_df = pd.DataFrame(results).sort_values(by="R2", ascending=False)
+
+# Save table
+csv_path = OUT_DIR / "derived_ablation_results.csv"
+res_df.to_csv(csv_path, index=False)
+
+print("\n=== Derived Feature Effect (Ablation Study) ===")
+print(res_df)
+print("\nSaved:", csv_path)
+
+
+# Plot bar chart
+plt.figure(figsize=(7, 4))
+plt.bar(res_df["Model"], res_df["R2"])
+plt.ylabel("R² (higher is better)")
+plt.title("Impact of Derived Features (Ablation Study)")
+plt.tight_layout()
+plt.savefig(OUT_DIR / "derived_ablation_results.png", dpi=200, bbox_inches="tight")
+plt.show()
+plt.close()
+
+print("Saved:", OUT_DIR / "derived_ablation_results.png")
+
+
+# ==============================
+# 2) OPTIONAL: SHAP BAR ON DERIVED ONLY
+# (hangi türetilmiş daha önemli?)
+# ==============================
+try:
+    X_der = df[DERIVED_FEATURES].values
+    y = df["target"].values
+
+    model_der = make_model()
+    model_der.fit(X_der, y)
+
+    # SHAP için örnekleme (hız)
+    n = min(8000, X_der.shape[0])
+    X_der_sample = X_der[:n]
+
+    explainer = shap.TreeExplainer(model_der)
+    shap_values = explainer.shap_values(X_der_sample)
+
+    plt.figure()
+    shap.summary_plot(shap_values, X_der_sample, feature_names=DERIVED_FEATURES, plot_type="bar", show=False)
+    plt.tight_layout()
+    plt.savefig(OUT_DIR / "shap_derived_bar.png", dpi=200, bbox_inches="tight")
+    plt.show()
+    plt.close()
+
+    print("Saved:", OUT_DIR / "shap_derived_bar.png")
+
+except Exception as e:
+    print("\n[WARN] SHAP derived-only plot could not be generated:", repr(e))

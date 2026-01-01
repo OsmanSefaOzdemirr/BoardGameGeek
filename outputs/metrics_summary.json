@@ -1,0 +1,29 @@
+{
+  "computed_at": "2026-01-01T20:15:16.861120+00:00",
+  "split": {
+    "train": 17394,
+    "test": 4349
+  },
+  "models": {
+    "linear_regression": {
+      "rmse": 0.7193357771787664,
+      "mae": 0.5490868282976656,
+      "r2": 0.40844675543024034
+    },
+    "random_forest": {
+      "rmse": 0.6116884906766688,
+      "mae": 0.4526624577474707,
+      "r2": 0.5722488984297293
+    },
+    "xgboost": {
+      "rmse": 0.5911191300931278,
+      "mae": 0.43853064772692946,
+      "r2": 0.6005333316872269
+    }
+  },
+  "artifacts": {
+    "test_parity_plot": "test_parity_plot.png",
+    "test_residuals": "test_residuals.png",
+    "training_curve_rmse": "training_curve_rmse.png"
+  }
+}
